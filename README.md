@@ -11,7 +11,8 @@
 ### Contenido: 
 
 
-[Trabajo Práctico N1](./Trabajos/TP1/TinyGPT.ipynb) :
+### Trabajo Práctico Nº 1 – TinyGPT & Mixture of Experts
+[Ver notebook principal](./Trabajos/TP1/TinyGPT.ipynb) 
     - Implementación y comparación de arquitecturas Transformer para generación de texto a nivel carácter: modelo base GPT vs. Mixture of Experts (MoE), entrenados en Shakespeare con análisis de perplejidad, comportamiento de generación y distribución de uso de expertos.
     Análisis Comparativo: Transformer Base vs. Mixture of Experts
     
@@ -23,24 +24,67 @@
            - Resultado: MoE logra 30% mejor perplejidad pero requiere ajuste cuidadoso para evitar colapso de modoRetry
 
 
-<!--   
-[desafío 2](./desafios/desafio_2/Desafio_2.ipynb) :
-    - Generación y ensayo de embeddings creados con la librería Gensim a partir de los modelos CBOW y Skipgram. Los embeddings se generaron a partir de un corpus en inglés basado en las novelas de Harry Potter. Para visualizar agrupación entre vectores se utilizó TSNE con librería Sklearn.
-  
-[desafío 3](./desafios/desafio_3/Desafio_3.ipynb) :
-    - Modelo de lenguaje con tokenizacion por caracteres: Implementacion y comparacion de tres arquitecturas de redes neuronales recurrentes (SimpleRNN, LSTM y GRU) para la generación de texto a nivel de caracteres utilizando el corpus de las novelas de Harry Potter.
-    
-[desafío 4](./desafios/desafio_4/Desafio_4.ipynb) :
-    - Implementación y comparación de arquitecturas Seq2Seq (con y sin atención) para traducción automática inglés-español. Experimentación sistemática con 4 configuraciones que explora el impacto crítico del tamaño de vocabulario, arquitectura del encoder y embeddings, alcanzando un modelo final con 66.41% de precisión y ~15 BLEU mediante encoder bidireccional y vocabulario optimizado de 5K palabras. -->
+### Trabajo Práctico Nº 2 – Chatbot RAG para comparación de CVs (este proyecto)
+
+[Ver código](./Trabajos/TP2/chatbot.py) · Ejecutar: `streamlit run Trabajos/TP2/chatbot.py`
+
+    Objetiv\o:
+        Desarrollar un asistente inteligente que permita responder consultas o comparar dos (o más) currículums en lenguaje natural.  
+        Ejemplos de preguntas:
+
+            - ¿Quién vive en Texas?
+            - ¿Algún candidato tiene experiencia en hotelería?
+            - ¿Quién tiene experiencia en pre-sales o ventas?
+            - ¿Quién tiene certificación PMP?
+            - ¿Quién ha trabajado con observabilidad / monitoring?
+            - ¿En qué universidad estudiaron?
+
+    Características técnicas (estado del arte 2025)
+    - **Embedding**: `BAAI/bge-large-en-v1.5` (1024 dim) 
+    - **Vector DB**: Pinecone (serverless, índice dedicado por dimensión)
+    - **Chunking inteligente**: 1600 caracteres + 400 de overlap + metadata de candidato en cada chunk
+    - **Retriever**: top-k=10 sin reranker 
+    - **LLM**: Llama-3.3-70B (Groq) a temperatura 0.0 + prompt optimizado para responder sobre CVs
+    - **Interfaz**: Streamlit
+
+    Modo de uso
+```bash
+# 1. Clonar el repositorio y acceder a la carpeta
+cd ./CEIA-NLP2
+
+# 2. Activar el entorno
+source .venv/bin/activate
+
+# 3. Subir los CVs en la carpeta correcta de curriculumns
+cp "mis-cv-*.pdf" Trabajos/TP2/resumes/
+
+# 4. Ejecutar el chatbot
+streamlit run Trabajos/TP2/chatbot.py
+```
+
 
 ### Estructura del repositorio:
 ```bash
-.
-├── Trabajos
-│   ├── TP1
-│   │   └── TinyGPT_es.ipynb
-│   |   ├── TinyGPT.ipynb
-│   |   ├── trainer.py
-├── images
+├── images/
+│   ├── nlp_banner.png
 │   └── nlp.png
+├── resumes/                      ← (raíz antigua, opcional)
+├── Trabajos/
+│   ├── TP1/
+│   │   ├── TinyGPT.ipynb
+│   │   ├── TinyGPT_es.ipynb
+│   │   ├── trainer.py
+│   │   └── checkpoints/         ← pesos de modelos entrenados
+│   └── TP2/
+│       ├── chatbot.py           
+│       ├── class_exercise.py
+│       ├── test_torch.ipynb
+│       └── resumes/             
+│           ├── Ariadna Garmendia - Resume - 2024.pdf
+│           ├── Martin Brocca - Solution Architect Resume.pdf
+│           └── Resume - Martin Brocca.docx
+├── main.py
+├── pyproject.toml
+├── uv.lock
 └── README.md
+```
