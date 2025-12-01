@@ -1,186 +1,177 @@
-import os
-import requests
 import streamlit as st
-import pinecone
+import os
+import torch
 from dotenv import load_dotenv
 
-"""
-Streamlit chatbot using Pinecone as RAG DB and GROQ for embeddings / completions.
+# LangChain Imports
+from langchain_groq import ChatGroq
+from langchain_pinecone import PineconeVectorStore
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_classic.chains import create_retrieval_chain, create_history_aware_retriever
+from langchain_classic.chains.combine_documents import create_stuff_documents_chain
+from langchain_community.chat_message_histories import ChatMessageHistory
+from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_core.runnables.history import RunnableWithMessageHistory
 
-Environment variables required (in .env or environment):
-- PINECONE_API_KEY
-- PINECONE_ENV (e.g. "us-west1-gcp")
-- PINECONE_INDEX (name of the existing Pinecone index)
-- GROQ_API_KEY
-- GROQ_API_URL (optional; default: "https://api.groq.ai")
-
-Install dependencies:
-pip install streamlit pinecone-client requests python-dotenv
-
-Save as: chatbot.py
-Run:
-streamlit run chatbot.py
-"""
+# --- Configuration and Initialization ---
 
 load_dotenv()
-
-# Configuration
+# Get API keys from .env file
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_API_URL = os.getenv("GROQ_API_URL", "https://api.groq.ai")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-PINECONE_ENV = os.getenv("PINECONE_ENV")
-PINECONE_INDEX = os.getenv("PINECONE_INDEX", "my-index")
 
-if not GROQ_API_KEY:
-    st.error("Missing GROQ_API_KEY environment variable.")
-    st.stop()
-if not PINECONE_API_KEY or not PINECONE_ENV:
-    st.error("Missing PINECONE_API_KEY or PINECONE_ENV environment variables.")
-    st.stop()
+# Define the device dynamically for embeddings (CUDA, MPS, or CPU)
+if torch.cuda.is_available():
+    device = "cuda"
+elif torch.backends.mps.is_available():
+    device = "mps"
+else:
+    device = "cpu"
 
-HEADERS = {
-    "Authorization": f"Bearer {GROQ_API_KEY}",
-    "Content-Type": "application/json",
-}
+INDEX_NAME = "resume-embeddings-2"
+MODEL_NAME = "llama-3.1-8b-instant" # Using the fast, supported Llama 3 8B model
 
 @st.cache_resource
-def init_pinecone(api_key: str, environment: str):
-    pinecone.init(api_key=api_key, environment=environment)
-    return pinecone
+def get_retriever():
+    """Initializes embeddings and Pinecone Vector Store, returns the retriever."""
+    if not PINECONE_API_KEY:
+        st.error("PINECONE_API_KEY not found. Please check your .env file.")
+        return None
 
-pinecone = init_pinecone(PINECONE_API_KEY, PINECONE_ENV)
-
-@st.cache_resource
-def get_index(index_name: str):
-    try:
-        return pinecone.Index(index_name)
-    except Exception as e:
-        st.error(f"Could not open Pinecone index '{index_name}': {e}")
-        st.stop()
-
-index = get_index(PINECONE_INDEX)
-
-def embed_text(text: str, model: str = "embed-1"):
-    """
-    Request an embedding from GROQ. Adjust endpoint/model names if your GROQ plan uses different names.
-    """
-    url = f"{GROQ_API_URL.rstrip('/')}/v1/embeddings"
-    payload = {"input": text, "model": model}
-    resp = requests.post(url, headers=HEADERS, json=payload, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
-    # Try common shapes: data["data"][0]["embedding"] or data["embedding"]
-    if isinstance(data, dict):
-        if "data" in data and isinstance(data["data"], list) and len(data["data"]) > 0:
-            return data["data"][0].get("embedding")
-        if "embedding" in data:
-            return data["embedding"]
-    raise ValueError("Unexpected embedding response shape: " + str(data))
-
-def query_pinecone(embedding, top_k: int = 4):
-    # Query the pinecone index and return matched metadata texts
-    try:
-        res = index.query(vector=embedding, top_k=top_k, include_metadata=True)
-    except TypeError:
-        # Fallback for client variations
-        res = index.query(queries=[embedding], top_k=top_k, include_metadata=True)
-        if isinstance(res, dict) and "results" in res:
-            res = res["results"][0]
-    matches = res.get("matches") if isinstance(res, dict) else getattr(res, "matches", [])
-    results = []
-    for m in matches:
-        md = m.get("metadata") if isinstance(m, dict) else getattr(m, "metadata", {})
-        text = md.get("text") or md.get("content") or md.get("source") or ""
-        results.append({"id": m.get("id") if isinstance(m, dict) else getattr(m, "id", None),
-                        "score": m.get("score") if isinstance(m, dict) else getattr(m, "score", None),
-                        "text": text})
-    return results
-
-def build_prompt(query: str, contexts: list):
-    context_text = "\n\n---\n\n".join([c["text"] for c in contexts if c["text"]])
-    prompt = (
-        "You are a helpful assistant. Use the provided context to answer the user's question. "
-        "If the answer is not contained in the context, say you don't know and do not hallucinate.\n\n"
-        f"CONTEXT:\n{context_text}\n\n"
-        f"USER QUESTION:\n{query}\n\n"
-        "Answer concisely and cite the context where appropriate."
+    # Initialize Embeddings model (using dynamic device)
+    embeddings = HuggingFaceEmbeddings(
+        model_name="all-MiniLM-L6-v2",
+        model_kwargs={'device': device}
     )
-    return prompt
+    
+    # Initialize the Vector Store (Note: Assumes index is already created and populated)
+    vectorstore = PineconeVectorStore(
+        index_name=INDEX_NAME, 
+        embedding=embeddings, 
+        pinecone_api_key=PINECONE_API_KEY
+    )
+    
+    # Define the retriever (k=5 to ensure enough context is retrieved)
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+    return retriever
 
-def call_chat_completion(prompt: str, model: str = "groq-1", max_tokens: int = 512, temperature: float = 0.0):
-    """
-    Call GROQ chat/completion endpoint. Response parsing includes common variants:
-    - {"choices":[{"message": {"content": "..."}}]}
-    - {"choices":[{"text":"..."}]}
-    """
-    url = f"{GROQ_API_URL.rstrip('/')}/v1/chat/completions"
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-    resp = requests.post(url, headers=HEADERS, json=payload, timeout=60)
-    resp.raise_for_status()
-    data = resp.json()
-    # Common shapes
-    if isinstance(data, dict) and "choices" in data and isinstance(data["choices"], list) and len(data["choices"]) > 0:
-        choice = data["choices"][0]
-        if isinstance(choice, dict):
-            # OpenAI-like chat shape
-            if "message" in choice and isinstance(choice["message"], dict) and "content" in choice["message"]:
-                return choice["message"]["content"]
-            # Completion-like shape
-            if "text" in choice:
-                return choice["text"]
-    # Fallback: if "output" or "content" keys exist somewhere
-    if isinstance(data, dict):
-        if "output" in data and isinstance(data["output"], str):
-            return data["output"]
-    raise ValueError("Unexpected completion response shape: " + str(data))
+@st.cache_resource
+def get_conversational_rag_chain(_retriever):
+    """Initializes the LLM and creates the complete RAG chain."""
+    if not GROQ_API_KEY:
+        st.error("GROQ_API_KEY not found. Please check your .env file.")
+        return None
 
-# Streamlit UI
-st.title("RAG Chatbot (Pinecone + GROQ)")
+    # 1. Instantiate Groq LLM
+    llm = ChatGroq(
+        model=MODEL_NAME,
+        temperature=0,
+        max_retries=2,
+    )
 
+    # 2. Contextualize Question Prompt (for history)
+    contextualize_q_system_prompt = (
+        "Given a chat history and the latest user question "
+        "which might reference context in the chat history, "
+        "formulate a standalone question which can be understood "
+        "without the chat history. Do NOT answer the question, "
+        "just reformulate it if needed and otherwise return it as is."
+    )
+    contextualize_q_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", contextualize_q_system_prompt),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
+        ]
+    )
+    history_aware_retriever = create_history_aware_retriever(
+        llm, _retriever, contextualize_q_prompt
+    )
+
+    # 3. Answer Question Prompt
+    qa_system_prompt = (
+        "You are a helpful HR assistant analyzing resumes. "
+        "Use the following pieces of retrieved context to answer "
+        "the question. Always cite which resume (source) the information comes from. "
+        "If you don't know the answer, say that you don't know. "
+        "Use three sentences maximum and keep the answer concise."
+        "\n\n"
+        "{context}"
+    )
+    qa_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", qa_system_prompt),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
+        ]
+    )
+
+    question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
+    rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
+    
+    # 4. State Management (Using Streamlit session_state for storage)
+    if "store" not in st.session_state:
+        st.session_state.store = {}
+        
+    def get_session_history(session_id: str) -> BaseChatMessageHistory:
+        if session_id not in st.session_state.store:
+            st.session_state.store[session_id] = ChatMessageHistory()
+        return st.session_state.store[session_id]
+
+    conversational_rag_chain = RunnableWithMessageHistory(
+        rag_chain,
+        get_session_history,
+        input_messages_key="input",
+        history_messages_key="chat_history",
+        output_messages_key="answer",
+    )
+    return conversational_rag_chain
+
+# --- Streamlit UI Code ---
+
+st.set_page_config(page_title="Resume RAG Analyst (Groq/Pinecone)", layout="wide")
+st.title("📄 Resume RAG Analyst")
+st.caption(f"Powered by **Groq** ({MODEL_NAME}) and **Pinecone** on **{device.upper()}**")
+
+# Initialize chat history display
 if "messages" not in st.session_state:
-    st.session_state["messages"] = []  # list of {"role": "user"/"assistant", "text": ...}
+    st.session_state.messages = []
 
-with st.sidebar:
-    st.header("Settings")
-    top_k = st.slider("Context top_k", min_value=1, max_value=10, value=4)
-    model = st.selectbox("LLM model", options=["groq-1", "gpt-3.5-turbo", "gpt-4"], index=0)
+# Get the RAG chain and ensure everything is set up
+retriever = get_retriever()
+if retriever is None:
+    st.stop()
+    
+conversational_rag_chain = get_conversational_rag_chain(retriever)
+if conversational_rag_chain is None:
+    st.stop()
+    
+# Display chat messages from history
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-# Chat display
-for m in st.session_state.messages:
-    if m["role"] == "user":
-        st.markdown(f"**You:** {m['text']}")
-    else:
-        st.markdown(f"**Assistant:** {m['text']}")
+# User input processing
+if prompt := st.chat_input("Ask a question about the candidate's resume..."):
+    # 1. Display user message
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-# Input
-query = st.text_input("Ask a question based on the RAG knowledge base", key="input")
-if st.button("Send") and query.strip():
-    st.session_state.messages.append({"role": "user", "text": query})
-
-    with st.spinner("Embedding query and retrieving context..."):
-        emb = embed_text(query)
-        contexts = query_pinecone(emb, top_k=top_k)
-
-    if not contexts:
-        answer = "No context retrieved from the RAG DB. The index may be empty or the query didn't match documents."
-    else:
-        prompt = build_prompt(query, contexts)
-        with st.spinner("Generating answer..."):
-            answer = call_chat_completion(prompt, model=model)
-
-    # Optionally attach source list
-    sources = "\n".join([f"- id: {c['id']} (score: {c['score']})" for c in contexts])
-    answer_with_sources = f"{answer}\n\nSources:\n{sources}" if contexts else answer
-
-    st.session_state.messages.append({"role": "assistant", "text": answer_with_sources})
-    # clear input
-    st.session_state.input = ""
-
-# Footer / index info
-st.markdown("---")
-st.caption(f"Pinecone index: {PINECONE_INDEX}")
+    # 2. Get AI response
+    with st.chat_message("assistant"):
+        with st.spinner("Analyzing resumes..."):
+            # Use a static session_id for simplicity, tied to the current Streamlit session
+            session_id = "streamlit_session"
+            
+            response = conversational_rag_chain.invoke(
+                {"input": prompt},
+                config={"configurable": {"session_id": session_id}}
+            )
+            
+            ai_response = response["answer"]
+            st.markdown(ai_response)
+            
+    # 3. Add AI response to chat history
+    st.session_state.messages.append({"role": "assistant", "content": ai_response})
