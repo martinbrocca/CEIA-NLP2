@@ -1,4 +1,4 @@
-# chatbot.py - 100% ERROR-FREE VERSION (December 2025)
+# chatbot.py – A Streamlit app for resume-based Q&A using LangChain, Groq, and Pinecone
 import streamlit as st
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_groq import ChatGroq
