@@ -1,4 +1,4 @@
-# TP2 - Sistema RAG para Análisis de Currículums
+# TP2 - Sistema RAG para análisis de currículums
 
 Sistema de preguntas y respuestas sobre CVs usando Retrieval Augmented Generation (RAG) con soporte para múltiples proveedores de LLM (Groq y Anthropic).
 
@@ -10,7 +10,12 @@ Sistema de preguntas y respuestas sobre CVs usando Retrieval Augmented Generatio
 
 Aplicación de Streamlit que permite analizar currículums en formato PDF mediante preguntas en lenguaje natural. Utiliza embeddings para búsqueda semántica en Pinecone y LLMs para generar respuestas contextualizadas.
 
-## Estructura del Proyecto
+## Videos de demostración de la aplicación
+Se generaron dos videos para evitar los límites de archivos grandes de GitHub
+  - [Demo1-Llama](./Video/Demo_TP2_Llama.mov)
+  - [Demo2-Claude](./Video/Demo_TP2_Claude.mov)
+
+## Estructura del proyecto
 
 ```
 TP2/
@@ -26,9 +31,13 @@ TP2/
 ├── requirements.txt               # Dependencias del proyecto
 ├── .env.example                   # Plantilla de variables de entorno
 ├── README.md                      # Este archivo
-└── resumes/                       # Carpeta para PDFs de CVs
-    ├── Candidato1.pdf
-    └── Candidato2.pdf
+├── resumes/                       # Carpeta para PDFs de CVs
+│   ├── Candidato1.pdf
+│   └── Candidato2.pdf
+└── Video
+    ├── Demo_TP2_Claude.mov
+    └── Demo_TP2_Llama.mov
+
 ```
 
 ## Arquitectura del Sistema
@@ -80,7 +89,8 @@ graph TB
     style K fill:#bbf,stroke:#333
 ```
 
-## Flujo de Ejecución
+
+## Flujo de ejecución
 
 ```mermaid
 sequenceDiagram
@@ -330,9 +340,8 @@ history_length = 10  # Últimos 10 mensajes
 - Esperar a que complete los 4 pasos
 - Verificar conexión a internet (requiere acceso a Pinecone)
 
-### Error: "credit balance is too low" (Anthropic)
-- Agregar créditos en https://console.anthropic.com/settings/billing
-- O cambiar a modelo de Groq en el selector
+### Error: "credit balance is too low" (Anthropic) o "Rate limit reached for model" (Groq)
+- Agregar créditos en el sistema de LLM
 
 ### Respuestas imprecisas
 - Ajustar temperature a 0.0 para mayor determinismo
@@ -343,21 +352,6 @@ history_length = 10  # Últimos 10 mensajes
 - Verificar que el CV tenga la ubicación en el header (primeros ~300 caracteres)
 - Formatos soportados: "Ciudad, Estado, ZIP, País" o "Ciudad, País"
 - Si el formato es no estándar, agregar patrón regex en `core/utils.py:extract_location()`
-
-## Estructura Modular (Preparación para TP3)
-
-El código está organizado para reutilización en TP3 (multi-agente):
-
-- **`core/`**: Módulos compartidos entre TP2 y TP3
-  - Embeddings, vectorstore, LLM factory
-  - Se reutilizan sin cambios en TP3
-
-- **`simple_rag.py`**: Implementación específica de TP2
-  - Single-agent RAG
-  - En TP3 se reemplaza por `multi_agent.py`
-
-- **`chatbot.py`**: UI de Streamlit
-  - Mínimos cambios entre TP2 y TP3
 
 ## Notas de Desarrollo
 
@@ -391,9 +385,6 @@ elif provider == "openai":
     return ChatOpenAI(model=model_name, ...)
 ```
 
-## Licencia
-
-MIT License - Libre para uso académico y comercial.
 
 ## Contacto
 
