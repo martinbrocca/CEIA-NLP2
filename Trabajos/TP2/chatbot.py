@@ -1,210 +1,242 @@
-# chatbot.py – A Streamlit app for resume-based Q&A using LangChain, Groq, and Pinecone
+"""
+chatbot.py
+Interfaz de Streamlit para el sistema RAG de análisis de currículums
+Soporta Groq y Anthropic (Claude)
+
+CEIA - NLP2 - Trabajo Práctico 2
+"""
+
 import streamlit as st
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough, RunnableLambda
-from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_pinecone import PineconeVectorStore
-from pinecone import Pinecone, ServerlessSpec
 from langchain_core.messages import HumanMessage, AIMessage
-from operator import itemgetter
-
-
-
 import os
 from pathlib import Path
-import PyPDF2
 from dotenv import load_dotenv
 
-load_dotenv()
+from simple_rag import SimpleRAG
+from core.llm import LLMFactory
 
-# ========================= CONFIG =========================
+# Cargar variables de entorno - buscar en múltiples ubicaciones
+env_locations = [
+    Path(__file__).parent / ".env",
+    Path(__file__).parent.parent.parent / ".env",
+    Path.cwd() / ".env",
+]
+
+for env_path in env_locations:
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path)
+        break
+
+# Configuración
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-INDEX_NAME = "resumes-bge-large"
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 RESUMES_FOLDER = "Trabajos/TP2/resumes"
+INDEX_NAME = "resumes-bge-large"
 
-# ========================= EMBEDDINGS (FULLY FIXED: RunnableLambda sanitizer) =========================
-@st.cache_resource
-def get_embeddings():
-    from langchain_huggingface import HuggingFaceEmbeddings
+# Configuración de página
+st.set_page_config(
+    page_title="Asistente de CVs",
+    page_icon="briefcase",
+    layout="wide"
+)
 
-    class CleanEmbeddings:
-        def __init__(self):
-            self.emb = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
+# Inicializar RAG system
+if "rag" not in st.session_state:
+    st.session_state.rag = SimpleRAG(
+        pinecone_api_key=PINECONE_API_KEY,
+        groq_api_key=GROQ_API_KEY,
+        anthropic_api_key=ANTHROPIC_API_KEY,
+        index_name=INDEX_NAME
+    )
 
-        def _sanitize(self, text):
-            if isinstance(text, dict):
-                text = str(text)
-            if not isinstance(text, str):
-                text = str(text)
-            return text.replace("\n", " ")
-
-        def embed_query(self, text):
-            return self.emb.embed_query(self._sanitize(text))
-
-        def embed_documents(self, texts):
-            cleaned = [self._sanitize(t) for t in texts]
-            return self.emb.embed_documents(cleaned)
-
-    return CleanEmbeddings()
-
-# ========================= RESUME LOADER =========================
-def extract_candidate_name(filename: str) -> str:
-    name = Path(filename).stem
-    for noise in [" - Resume", " Resume", " - CV", " CV", " 2024", " 2025", "-2024", "(Final)", " - final"]:
-        name = name.replace(noise, "")
-    if " - " in name:
-        name = name.split(" - ")[0]
-    name = name.replace("_", " ").replace("-", " ")
-    parts = [p for p in name.split() if p and p[0].isupper()]
-    return " ".join(parts[:3]) if len(parts) >= 2 else name.strip().title()
-
-def load_resumes() -> list[Document]:
-    docs = []
-    folder = Path(RESUMES_FOLDER)
-    folder.mkdir(exist_ok=True)
-    if not any(folder.glob("*.pdf")):
-        st.warning("No PDFs in ./resumes folder")
-        return docs
-
-    for pdf_path in sorted(folder.glob("*.pdf")):
-        try:
-            with open(pdf_path, "rb") as f:
-                reader = PyPDF2.PdfReader(f)
-                text = "\n".join(page.extract_text() or "" for page in reader.pages)
-            candidate = extract_candidate_name(pdf_path.name)
-            docs.append(Document(page_content=text, metadata={"candidate": candidate, "source": pdf_path.name}))
-            st.success(f"Loaded: **{candidate}**")
-        except Exception as e:
-            st.error(f"Error: {e}")
-    return docs
-
-# ========================= CHUNKING & VECTORSTORE =========================
-def get_splitter():
-    return RecursiveCharacterTextSplitter(chunk_size=1600, chunk_overlap=400, keep_separator=True)
-
-@st.cache_resource
-def get_vectorstore(_docs: list[Document]):
-    if not _docs:
-        return None
-    chunks = get_splitter().split_documents(_docs)
-    for i, c in enumerate(chunks):
-        c.metadata["chunk_id"] = i
-        c.metadata["candidate"] = c.metadata.get("candidate", "Unknown")
-
-    pc = Pinecone(api_key=PINECONE_API_KEY)
-    if INDEX_NAME not in pc.list_indexes().names():
-        pc.create_index(name=INDEX_NAME, dimension=1024, metric="cosine",
-                        spec=ServerlessSpec(cloud="aws", region="us-east-1"))
-
-    return PineconeVectorStore.from_documents(chunks, get_embeddings(), index_name=INDEX_NAME)
-
-@st.cache_resource
-def get_retriever():
-    vs = get_vectorstore(st.session_state.raw_docs)
-    return vs.as_retriever(search_kwargs={"k": 10}) if vs else None
-
-# ========================= LLM & CHAIN =========================
-@st.cache_resource
-def get_llm():
-    return ChatGroq(model="llama-3.3-70b-versatile", temperature=0.0, groq_api_key=GROQ_API_KEY)
-
-system_prompt = """You are a brutally accurate HR screening bot. Your job is to compare all resumes uploaded to the system.
-
-STRICT RULES - FOLLOW OR BE FIRED:
-- Base every single statement ONLY on the retrieved context
-- NEVER guess, assume, or "think" anything not explicitly written
-- ALWAYS start your answer with the candidate name(s) involved
-- If only one has it → say clearly which one
-- If neither has it → say "Neither candidate"
-- If you're unsure → say "Not clearly mentioned"
-- NEVER say "however", "actually", "but", or flip-flop mid-sentence
-- Answer in one short, direct paragraph maximum
-
-Context:
-{context}"""
-
-prompt = ChatPromptTemplate.from_messages([
-    ("system", system_prompt),
-    MessagesPlaceholder("chat_history"),
-    ("human", "{question}")
-])
-
-def convert_history(messages):
-    out = []
-    for role, content in messages:
-        if role == "user":
-            out.append(HumanMessage(content=content))
-        elif role == "assistant":
-            out.append(AIMessage(content=content))
-    return out
-
-def format_docs(docs):
-    if not docs:
-        return "No relevant information."
-    seen = set()
-    parts = []
-    for d in docs:
-        cand = d.metadata.get("candidate", "Unknown")
-        src = d.metadata.get("source", "")
-        if (cand, src) not in seen:
-            seen.add((cand, src))
-            parts.append(f"\n**{cand}** – {src}\n")
-        parts.append(d.page_content.strip())
-    return "\n".join(parts)
-
-# ========================= STREAMLIT =========================
-st.title("Resume QA Bot – HR Assistant")
-
-if st.button("Re-index resumes", type="primary"):
-    with st.spinner("Indexing..."):
-        st.session_state.raw_docs = load_resumes()
-        if st.session_state.raw_docs:
-            get_vectorstore.clear()
-            st.success("Done!")
-
-if "raw_docs" not in st.session_state:
-    st.session_state.raw_docs = []
+# Inicializar estado
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+if "indexed" not in st.session_state:
+    st.session_state.indexed = False
+
+# Header
+st.title("Asistente de Análisis de Currículums")
+
+st.markdown("""
+Sistema de preguntas y respuestas sobre CVs:
+  - Presiona "Re-indexar CVs" para cargar e indexar los currículums desde la carpeta `resumes/`     
+  - Haz preguntas sobre los candidatos usando el chat abajo
+
+Ejemplos de preguntas:
+  - "¿Quién tiene experiencia en Machine Learning?"
+  - "¿Qué candidato tiene conocimientos en Python y SQL?"
+""")
+
+# Sidebar
+with st.sidebar:
+    st.header("Configuración")
+    
+    # Selector de modelo
+    st.subheader("Modelo LLM")
+    model_names = LLMFactory.get_model_names()
+    
+    selected_display_name = st.selectbox(
+        "Selecciona el modelo:",
+        options=list(model_names.keys()),
+        index=0,
+        help="Modelos Groq o Anthropic (Claude)"
+    )
+    selected_model = model_names[selected_display_name]
+    
+    # Temperatura
+    st.subheader("Creatividad")
+    temperature = st.slider(
+        "Temperature (0 = preciso, 1 = creativo):",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.0,
+        step=0.1,
+        help="Temperatura más alta = respuestas más creativas"
+    )
+    
+    # Instrucciones personalizadas
+    st.subheader("Instrucciones personalizadas")
+    custom_instructions = st.text_area(
+        "Agrega instrucciones adicionales:",
+        value="",
+        height=100,
+        placeholder="Ejemplo: Responde siempre en bullet points.",
+        help="Estas instrucciones se añadirán al prompt del sistema"
+    )
+    
+    st.divider()
+    
+    # Gestión de CVs
+    st.subheader("Gestión de CVs")
+    
+    if st.button("Re-indexar CVs", type="primary", use_container_width=True):
+        try:
+            progress = st.empty()
+            progress.info("Paso 1/4: Cargando PDFs...")
+            
+            from core.utils import load_resume_pdfs
+            docs = load_resume_pdfs(RESUMES_FOLDER)
+            
+            if not docs:
+                st.error("No se encontraron PDFs en la carpeta de resumes")
+            else:
+                progress.success(f"Cargados {len(docs)} CVs")
+                
+                progress.info("Paso 2/4: Creando índice en Pinecone...")
+                st.session_state.rag.docs = docs
+                created = st.session_state.rag.vectorstore_manager.create_index(force_refresh=True)
+                
+                if created:
+                    progress.success("Índice creado y listo")
+                else:
+                    progress.info("Índice ya existía")
+                
+                progress.info("Paso 3/4: Generando embeddings e indexando...")
+                st.session_state.rag.vectorstore_manager.add_documents(
+                    docs, 
+                    st.session_state.rag.embeddings
+                )
+                progress.success("Documentos indexados")
+                
+                progress.info("Paso 4/4: Configurando retriever...")
+                st.session_state.rag._retriever = st.session_state.rag.vectorstore_manager.get_retriever(
+                    st.session_state.rag.embeddings,
+                    k=10
+                )
+                
+                progress.empty()
+                st.session_state.indexed = True
+                
+                candidates = list(set(
+                    doc.metadata.get("candidate", "Unknown")
+                    for doc in docs
+                ))
+                
+                st.success(f"Indexación completada: {len(docs)} CVs, {len(candidates)} candidatos")
+                
+                st.info("Candidatos cargados:")
+                for candidate in sorted(candidates):
+                    location = next(
+                        (d.metadata.get("location", "") for d in docs if d.metadata.get("candidate") == candidate),
+                        ""
+                    )
+                    st.write(f"- {candidate}" + (f" ({location})" if location else ""))
+                
+        except Exception as e:
+            st.error(f"Error al indexar: {str(e)}")
+            import traceback
+            with st.expander("Ver detalles del error"):
+                st.code(traceback.format_exc())
+    
+    # Información del sistema
+    st.divider()
+    st.caption(f"**Modelo:** {selected_display_name}")
+    st.caption(f"**Temperature:** {temperature}")
+    
+    # Debug: Estado de API keys
+    with st.expander("Estado de API Keys"):
+        st.write(f"Groq: {'✓' if GROQ_API_KEY else '✗ NO configurada'}")
+        st.write(f"Anthropic: {'✓' if ANTHROPIC_API_KEY else '✗ NO configurada'}")
+        st.write(f"Pinecone: {'✓' if PINECONE_API_KEY else '✗ NO configurada'}")
+        if ANTHROPIC_API_KEY:
+            st.caption(f"Claude key: {ANTHROPIC_API_KEY[:20]}...")
+    
+    # Candidatos cargados
+    if st.session_state.indexed:
+        candidates = st.session_state.rag.candidates
+        st.caption(f"**Candidatos:** {len(candidates)}")
+        
+        with st.expander("Ver candidatos"):
+            for name in sorted(candidates):
+                st.write(f"- {name}")
+
+# Chat interface
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
 
-if question := st.chat_input("Ask about the candidates..."):
-    st.session_state.messages.append({"role": "user", "content": question})
-    with st.chat_message("user"):
-        st.markdown(question)
-
-    retriever = get_retriever()
-    if not retriever:
-        st.error("Index first!")
+if question := st.chat_input("Pregunta sobre los candidatos..."):
+    
+    if not st.session_state.indexed:
+        st.error("Por favor, indexa los CVs primero usando el botón en la barra lateral.")
     else:
+        st.session_state.messages.append({"role": "user", "content": question})
+        with st.chat_message("user"):
+            st.markdown(question)
+        
         with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                chain = (
-                {
-                    "context": itemgetter("question") | retriever | format_docs,
-                    "question": itemgetter("question"),
-                    "chat_history": itemgetter("chat_history"),
-                }
-                | prompt
-                | get_llm()
-                | StrOutputParser()
-            )
-                raw_history = st.session_state.messages[-10:]
+            with st.spinner("Pensando..."):
+                try:
+                    recent_messages = st.session_state.messages[-10:]
+                    chat_history = []
+                    
+                    for msg in recent_messages:
+                        if msg["role"] == "user":
+                            chat_history.append(HumanMessage(content=msg["content"]))
+                        elif msg["role"] == "assistant":
+                            chat_history.append(AIMessage(content=msg["content"]))
+                    
+                    response = st.session_state.rag.query(
+                        question=question,
+                        chat_history=chat_history,
+                        model_name=selected_model,
+                        temperature=temperature,
+                        custom_instructions=custom_instructions
+                    )
+                    
+                    st.markdown(response)
+                    
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": response
+                    })
+                    
+                except Exception as e:
+                    st.error(f"Error al procesar la query: {str(e)}")
 
-                history = []
-                for m in raw_history:
-                    if m["role"] == "user":
-                        history.append(HumanMessage(content=m["content"]))
-                    elif m["role"] == "assistant":
-                        history.append(AIMessage(content=m["content"]))
-                response = chain.invoke({"question": question, "chat_history": history})
-                st.markdown(response)
-                st.session_state.messages.append({"role": "assistant", "content": response})
+# Footer
+st.divider()
+st.caption("CEIA - NLP2 - Trabajo Práctico 2 | Powered by LangChain, Groq, Anthropic y Pinecone")
