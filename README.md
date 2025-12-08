@@ -24,12 +24,27 @@
            - Resultado: MoE logra 30% mejor perplejidad pero requiere ajuste cuidadoso para evitar colapso de modoRetry
 
 
-### Trabajo Práctico Nº 2 – Chatbot RAG para comparación de CVs (este proyecto)
+### Trabajo Práctico Nº 2 – Chatbot RAG para comparación de CVs 
 
-[Ver código](./Trabajos/TP2/chatbot.py) · Ejecutar: `streamlit run Trabajos/TP2/chatbot.py`
+[Ir al TP](./Trabajos/TP2/README.md) · Ejecutar: `streamlit run Trabajos/TP2/chatbot.py`
 
-    Objetiv\o:
+    Objetivo:
         Desarrollar un asistente inteligente que permita responder consultas o comparar dos (o más) currículums en lenguaje natural.  
+        Ejemplos de preguntas:
+
+            - ¿Que skills tiene el candidato?
+            - ¿Tiene experiencia en hotelería?
+            - ¿Tiene experiencia en pre-sales o ventas?
+            - ¿Quién tiene certificación PMP?
+            - ¿Quién ha trabajado con observabilidad / monitoring?
+            - ¿En qué universidad estudió?
+
+### Trabajo Práctico Nº 3 – Chatbot RAG multiagente para comparación de CVs
+
+[Ir al TP](./Trabajos/TP3/README.md) · Ejecutar: `streamlit run Trabajos/TP3/chat_bot_multi.py`
+
+    Objetivo:
+        Desarrollar un agentes que responda de manera eficiente sobre currículums de personas en forma eficiente. El sistema tiene un agente por persona y permita responder consultas o comparar dos (o más) currículums en lenguaje natural.  
         Ejemplos de preguntas:
 
             - ¿Quién vive en Texas?
@@ -38,53 +53,3 @@
             - ¿Quién tiene certificación PMP?
             - ¿Quién ha trabajado con observabilidad / monitoring?
             - ¿En qué universidad estudiaron?
-
-    Características técnicas (estado del arte 2025)
-    - **Embedding**: `BAAI/bge-large-en-v1.5` (1024 dim) 
-    - **Vector DB**: Pinecone (serverless, índice dedicado por dimensión)
-    - **Chunking inteligente**: 1600 caracteres + 400 de overlap + metadata de candidato en cada chunk
-    - **Retriever**: top-k=10 sin reranker 
-    - **LLM**: Llama-3.3-70B (Groq) a temperatura 0.0 + prompt optimizado para responder sobre CVs
-    - **Interfaz**: Streamlit
-
-    Modo de uso
-```bash
-# 1. Clonar el repositorio y acceder a la carpeta
-cd ./CEIA-NLP2
-
-# 2. Activar el entorno
-source .venv/bin/activate
-
-# 3. Subir los CVs en la carpeta correcta de curriculumns
-cp "mis-cv-*.pdf" Trabajos/TP2/resumes/
-
-# 4. Ejecutar el chatbot
-streamlit run Trabajos/TP2/chatbot.py
-```
-
-
-### Estructura del repositorio:
-```bash
-├── images/
-│   ├── nlp_banner.png
-│   └── nlp.png
-├── resumes/                      ← (raíz antigua, opcional)
-├── Trabajos/
-│   ├── TP1/
-│   │   ├── TinyGPT.ipynb
-│   │   ├── TinyGPT_es.ipynb
-│   │   ├── trainer.py
-│   │   └── checkpoints/         ← pesos de modelos entrenados
-│   └── TP2/
-│       ├── chatbot.py           
-│       ├── class_exercise.py
-│       ├── test_torch.ipynb
-│       └── resumes/             
-│           ├── Ariadna Garmendia - Resume - 2024.pdf
-│           ├── Martin Brocca - Solution Architect Resume.pdf
-│           └── Resume - Martin Brocca.docx
-├── main.py
-├── pyproject.toml
-├── uv.lock
-└── README.md
-```
