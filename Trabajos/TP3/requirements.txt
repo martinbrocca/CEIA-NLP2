@@ -1,0 +1,30 @@
+# TP3 - Sistema Multi-Agente RAG
+
+# Streamlit
+streamlit>=1.28.0
+
+# LangChain ecosystem
+langchain>=0.1.0
+langchain-core>=0.1.0
+langchain-groq>=0.0.1
+langchain-anthropic>=0.1.0
+langchain-pinecone>=0.1.0
+langchain-huggingface>=0.0.1
+
+# LangGraph (NUEVO para TP3)
+langgraph>=0.0.40
+
+# Vector database
+pinecone-client>=3.0.0
+
+# Embeddings
+sentence-transformers>=2.2.0
+
+# PDF processing
+PyPDF2>=3.0.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Groq API
+groq>=0.4.0
