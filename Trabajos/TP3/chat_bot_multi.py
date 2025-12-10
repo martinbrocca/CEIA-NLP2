@@ -149,7 +149,7 @@ with st.sidebar:
                         (d.metadata.get("location", "") for d in docs if d.metadata.get("candidate") == candidate),
                         ""
                     )
-                    st.write(f"🤖 Agent_{candidate}" + (f" ({location})" if location else ""))
+                    st.write(f"Agent_{candidate}" + (f" ({location})" if location else ""))
                 
         except Exception as e:
             st.error(f"Error al indexar: {str(e)}")
@@ -213,7 +213,7 @@ for m in st.session_state.messages:
 if question := st.chat_input("Pregunta sobre los candidatos..."):
     
     if not st.session_state.indexed:
-        st.error("⚠️ Por favor, indexa los CVs primero usando el botón en la barra lateral.")
+        st.error("Por favor, indexa los CVs primero usando el botón en la barra lateral.")
     else:
         # Agregar mensaje del usuario
         st.session_state.messages.append({"role": "user", "content": question})
@@ -277,7 +277,7 @@ if question := st.chat_input("Pregunta sobre los candidatos..."):
                     })
                     
                 except Exception as e:
-                    st.error(f"❌ Error al procesar la query: {str(e)}")
+                    st.error(f"Error al procesar la query: {str(e)}")
                     import traceback
                     with st.expander("Traceback"):
                         st.code(traceback.format_exc())

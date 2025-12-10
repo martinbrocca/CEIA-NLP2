@@ -20,14 +20,19 @@ class RouterNode:
     Estrategia híbrida: Regex primero, LLM como fallback
     """
     
-    def __init__(self, llm, candidates):
+    def __init__(self, llm, candidates, default_agent="martin"):
         """
         Args:
             llm: Instancia de LLM para routing inteligente
-            candidates: Lista de nombres de candidatos disponibles
+            candidates: Lista de nombres de candidatos disponibles (nombres completos)
+            default_agent: Agente a usar por defecto cuando no se menciona ningún candidato
         """
         self.llm = llm
-        self.candidates = [c.lower() for c in candidates]
+        # Guardar nombres completos para display
+        self.full_candidates = candidates
+        # Extraer primeros nombres para matching (lowercase)
+        self.candidates = [c.split()[0].lower() for c in candidates]
+        self.default_agent = default_agent.lower()
         
         # Palabras clave para detección de comparaciones
         self.comparison_keywords = [
@@ -56,12 +61,12 @@ class RouterNode:
             else:
                 return mentioned, f"Regex: Detectó pregunta específica sobre {mentioned[0]}"
         
-        # Caso 2: Pregunta comparativa sin nombres específicos
+        # Caso 2: Pregunta comparativa sin nombres específicos → todos
         if any(kw in question_lower for kw in self.comparison_keywords):
             return self.candidates, "Regex: Detectó pregunta comparativa, consultando todos"
         
-        # Caso 3: No hay match claro → usar LLM
-        return None, "Regex: No hay match claro, escalando a LLM"
+        # Caso 3: No menciona candidatos ni es comparación → agente por defecto
+        return [self.default_agent], f"Regex: Sin mención específica, usando agente por defecto ({self.default_agent})"
     
     def _llm_route(self, question: str) -> tuple[list[str], str]:
         """
@@ -74,13 +79,19 @@ class RouterNode:
             ("system", """Eres un router que decide qué agentes especialistas deben responder una pregunta.
 
 Candidatos disponibles: {candidates}
+Agente por defecto: {default_agent}
 
 Reglas:
 - Si la pregunta es sobre UN candidato específico → retorna solo ese nombre
-- Si es comparación o pregunta general → retorna "all"
-- Si menciona múltiples candidatos → retorna esos nombres separados por coma
+- Si es comparación o menciona "todos" → retorna "all"
+- Si NO menciona candidatos específicos → retorna "default"
 
-Formato de respuesta: SOLO los nombres (ej: "martin" o "martin,Candidato2" o "all")
+Formato de respuesta: SOLO una de estas opciones:
+- Un nombre: "martin" o "ariadna"
+- Múltiples: "martin,ariadna"
+- Todos: "all"
+- Por defecto: "default"
+
 NO agregues explicaciones."""),
             ("human", "{question}")
         ])
@@ -89,17 +100,20 @@ NO agregues explicaciones."""),
         
         result = chain.invoke({
             "question": question,
-            "candidates": ", ".join(self.candidates)
+            "candidates": ", ".join(self.candidates),
+            "default_agent": self.default_agent
         }).strip().lower()
         
         # Parse resultado
         if result == "all":
             return self.candidates, "LLM: Pregunta general/comparativa, consultando todos"
+        elif result == "default":
+            return [self.default_agent], f"LLM: Sin mención específica, usando agente por defecto ({self.default_agent})"
         else:
             selected = [c.strip() for c in result.split(",") if c.strip() in self.candidates]
             if not selected:
-                # Fallback: si LLM da respuesta inválida, consultar todos
-                return self.candidates, "LLM: Respuesta inválida, consultando todos por seguridad"
+                # Fallback: usar agente por defecto
+                return [self.default_agent], f"LLM: Respuesta inválida, usando agente por defecto ({self.default_agent})"
             return selected, f"LLM: Seleccionó agentes específicos: {', '.join(selected)}"
     
     def __call__(self, state: AgentState) -> AgentState:
@@ -152,18 +166,19 @@ class SpecialistAgentNode:
         
         # Prompt especializado para este agente
         self.prompt = ChatPromptTemplate.from_messages([
-            ("system", f"""Eres un agente especialista en el candidato {candidate_name}.
+            ("system", f"""Eres un agente especialista que analiza el CV del candidato {candidate_name}.
 
 Tu trabajo:
-- Responder preguntas SOLO sobre {candidate_name}
-- Basar respuestas en el contexto proporcionado
-- Si no tienes información suficiente, di "No tengo información sobre esto en el CV de {candidate_name}"
+- Responder preguntas SOBRE {candidate_name} basándote en su CV
+- IMPORTANTE: Siempre responde en TERCERA PERSONA mencionando el nombre del candidato
+- Ejemplo: "{candidate_name} tiene experiencia en..." o "{candidate_name} maneja..."
+- Si no tienes información suficiente, di "No se menciona información sobre esto en el CV de {candidate_name}"
 - Sé conciso y preciso
+- NUNCA respondas en primera persona ("Yo tengo...", "Manejo...")
 
-IMPORTANTE: Tu respuesta debe ser desde la perspectiva de este candidato específico.
 NO menciones otros candidatos, solo enfócate en {candidate_name}.
 
-Contexto sobre {candidate_name}:
+Contexto del CV de {candidate_name}:
 {{context}}"""),
             ("human", "{question}")
         ])

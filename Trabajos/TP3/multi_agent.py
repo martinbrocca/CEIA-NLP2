@@ -94,13 +94,20 @@ class MultiAgentRAG:
         agent_llm = llm  # Por ahora, mismo LLM
         
         # Crear nodos
-        router = RouterNode(llm=llm, candidates=self.candidates)
+        router = RouterNode(
+            llm=llm,
+            candidates=self.candidates,
+            default_agent="martin"  # Agente del alumno por defecto
+        )
         aggregator = AggregatorNode(llm=llm)
         
         # Crear agentes especialistas (uno por candidato)
         self._specialist_agents = {}
         for candidate in self.candidates:
-            # Retriever filtrado por candidato
+            # Usar solo el primer nombre como key (ej: "Martin Brocca" → "martin")
+            first_name = candidate.split()[0].lower()
+            
+            # Retriever filtrado por candidato (usa nombre completo en metadata)
             retriever = self.vectorstore_manager.get_retriever(
                 self.embeddings,
                 k=5,  # Top-5 por candidato (menos que TP2 porque es filtrado)
@@ -108,12 +115,13 @@ class MultiAgentRAG:
             )
             
             agent = SpecialistAgentNode(
-                candidate_name=candidate,
+                candidate_name=candidate,  # Nombre completo para display
                 retriever=retriever,
                 llm=agent_llm
             )
             
-            self._specialist_agents[candidate.lower()] = agent
+            # Guardar con primer nombre como key
+            self._specialist_agents[first_name] = agent
         
         # Construir grafo
         workflow = StateGraph(AgentState)

@@ -16,6 +16,7 @@ Sistema RAG multi-agente que utiliza:
 
 ## Video de demostración
 [Video TP3](./Video/Demo_TP3.mov)
+[Video TP3 - Parte2](./Video/Demo_TP3_part2.mov)
 
 ## Arquitectura
 
